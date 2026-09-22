@@ -3,11 +3,10 @@ title: "External Calls"
 description: "How external calls work: submission-time execution, recording in the transaction, validation by confirming participants, and the trust model"
 ---
 
-<Warning>
-External calls are an early-access feature. They require a synchronizer running protocol
-version 36 or later and a Daml package targeting LF 2.4 or later. Early-access features are
-not covered by production support.
-</Warning>
+<Note>
+External calls require a synchronizer running protocol version 36 or later and a Daml package
+targeting LF 2.4 or later.
+</Note>
 
 External calls let a Daml choice invoke a function on an **extension service**: a deterministic
 service that the participant node operator configures and runs alongside the participant. The
