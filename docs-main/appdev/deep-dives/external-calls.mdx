@@ -1,6 +1,6 @@
 ---
 title: "External Calls"
-description: "Let a Daml choice invoke a deterministic extension service, with the result recorded in the transaction and re-validated by confirming participants"
+description: "How external calls work: submission-time execution, recording in the transaction, validation by confirming participants, and the trust model"
 ---
 
 <Warning>
@@ -15,6 +15,10 @@ call's result is recorded in the transaction, so every confirming participant ca
 against its own extension service before approving the transaction. This extends the ledger model
 with computations that are impractical to express in Daml (for example, verifying an exotic
 signature scheme) while preserving the guarantee that all stakeholders agree on the result.
+
+This page explains the protocol: how a call travels through the transaction and what the
+participants verify. For the practical side — a worked example, participant configuration, and
+the `externalCall` function — see [Using External Calls](/appdev/deep-dives/external-calls-usage).
 
 ## External Call Flow
 
@@ -42,13 +46,20 @@ results are part of the prepared transaction and are covered by the signed trans
 Confirming participants validate recorded results twice over:
 
 - **Consistency** — All visible occurrences of the same call (same extension, function,
-  configuration, and input) must record the same output. A disagreement raises a security alarm
-  on every participant that receives the views and rejects the affected views.
-- **Re-validation** — Participants hosting a confirming party responsible for a recorded call
-  re-execute the call against *their own* extension service and compare the output with the
-  recorded one. A mismatch is treated the same way as a recorded disagreement. A participant
-  that cannot re-validate (for example, because no extension service is configured) abstains
-  from confirming instead of approving.
+  configuration, and input) must record the same output. On a disagreement, every participant
+  that receives the affected views logs a warning with error code
+  `EXTERNAL_CALL_RESULT_DISAGREEMENT_ALARM` and rejects those views with
+  `LOCAL_VERDICT_EXTERNAL_CALL_RESULT_DISAGREEMENT`.
+- **Re-validation** — Participants hosting a checking party of a recorded call re-execute the
+  call against *their own* extension service and compare the output with the recorded one. A
+  mismatch is treated the same way as a recorded disagreement. A participant that cannot
+  re-validate (for example, because no extension service is configured) abstains from confirming
+  instead of approving.
+
+The **checking parties** of a call are the confirming parties of the transaction view that
+records it — the parties whose confirmation of that view Canton's confirmation policy requires.
+Every call is therefore re-validated by the participants hosting its checking parties;
+participants that only observe the view do not re-execute the call.
 
 </Step>
 <Step title="Use the result">
@@ -60,26 +71,6 @@ confirming participants.
 </Step>
 </Steps>
 
-## Writing Daml Code with External Calls
-
-The function is provided by the Daml standard library module `DA.ExternalCall`:
-
-```daml
-import DA.ExternalCall
-
-externalCall : Text -> Text -> Text -> Text -> Update Text
-```
-
-`externalCall extensionId functionId config input` requests a call to function `functionId`
-of the extension configured on the participant under `extensionId`. The `config` argument
-is the extension configuration hash and `input` is the call input; both are hex-encoded byte
-strings, and the empty string represents zero bytes.
-Payloads are canonicalized to lowercase before execution, so two calls that differ only in hex
-casing are the same call. The result is the service response, again as a hex-encoded byte
-string. Malformed payloads, missing extension configuration, extension-service failures, and
-invalid service output fail the update; runtime and service errors include the extension and
-function context.
-
 ## Operational and Security Assumptions
 
 ### Determinism
@@ -88,9 +79,10 @@ function context.
 Extension services **must be deterministic**: for a given extension, function, configuration,
 and input, every honest service instance must always return the same output. The protocol
 detects non-determinism — validation compares recorded and recomputed outputs — and treats it
-as suspicious behavior: the transaction is rejected and a security alarm is raised. A service
-that depends on wall-clock time, randomness, or mutable external state will make transactions
-fail non-deterministically.
+as suspicious behavior: the affected views are rejected and the
+`EXTERNAL_CALL_RESULT_DISAGREEMENT_ALARM` warning is logged. A service that depends on
+wall-clock time, randomness, or mutable external state will make transactions fail
+non-deterministically.
 </Warning>
 
 ### Topology and Connectivity
@@ -99,10 +91,10 @@ Which nodes need to reach an extension service:
 
 - The **submitting participant** executes the call at submission time and therefore needs the
   extension configured and reachable.
-- Every **confirming participant** that hosts a party responsible for checking a recorded call
-  re-executes the call at validation time and therefore also needs the *same* extension (same
-  identifier, semantically identical service) configured and reachable. A confirming participant
-  without the extension abstains, which can prevent the transaction from being committed.
+- Every **confirming participant** that hosts a checking party of a recorded call re-executes
+  the call at validation time and therefore also needs the *same* extension (same identifier,
+  semantically identical service) configured and reachable. A confirming participant without
+  the extension abstains, which can prevent the transaction from being committed.
 - Participants that only observe the transaction do not contact the service.
 
 Operators of participants that confirm external-call workflows should treat the extension
@@ -123,38 +115,10 @@ fail at the submitting participant, and validations abstain at the confirming pa
   the service must be trusted with the payload data it receives (including what it echoes into
   its own error responses).
 
-## Configuring an Extension Service
-
-Extension services are configured per participant under
-`canton.participants.<participant>.parameters.engine.extensions`, keyed by the extension
-identifier that Daml code passes to `externalCall`:
-
-```conf
-canton.participants.participant1.parameters.engine.extensions {
-  my-extension {
-    address = "extension.example.com"
-    port = 8443
-    version = "v1"
-    max-retries = 3
-    request-timeout = 8s
-  }
-}
-```
-
-Notable parameters (see the scaladoc of `ExtensionServiceConfig` for the full reference):
-
-- `address`, `port`, `version`: the endpoint of the extension service's HTTP API.
-- `tls`: enable TLS towards the service, with `tls.trust-collection-file` naming the trust
-  anchors.
-- `auth`: optional bearer-token authentication (`type = bearer-token-file` with
-  `token-file`); the token is never logged.
-- `connect-timeout`, `request-timeout`, `max-retries`, `retry-initial-delay`,
-  `retry-max-delay`: connection handling; retries apply per logical call.
-- `max-response-body-bytes`: upper bound on accepted service responses.
-- `validate-on-startup`: probe the service's version endpoint when the participant starts.
-
 ## Next Steps
 
+- [Using External Calls](/appdev/deep-dives/external-calls-usage) — A worked example, the
+  participant configuration, and the `externalCall` function reference.
 - [External Signing Hashing Algorithm](/appdev/deep-dives/external-signing-hashing-algorithm) —
   Hashing scheme V4 covers recorded external-call results in externally signed transactions.
 - [Error Codes Reference](/appdev/reference/error-codes) — The external-call validation error
